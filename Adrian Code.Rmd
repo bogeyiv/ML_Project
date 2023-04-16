@@ -1,0 +1,105 @@
+---
+title: "Adrian Code"
+author: "Adrian Bogart"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r}
+library(tidyverse)
+library(readxl)
+# Load Data
+getwd()
+homicide <- read_xlsx("UNODC_summary.xlsx")
+
+# Clean Data (Year Limits and Variable Names)
+homicide <- homicide %>% 
+  filter(year > 2009, year < 2021) %>% 
+  select(subregion, year, female_homicide_rates, sc_kidnapping, sc_robbery, sc_serious_assault, sc_sexual_violence, sc_sv_rape, arrested_cautioned_suspected, prosecuted, convicted)
+colnames(homicide) <- c("subregion", "year", "femicide", "kidnapping", "robbery", "serious_assault", "sexual_violence", "rape", "arrested", "prosecuted", "convicted")
+
+# Create "Femicide_Class" for Classification Problem.
+homicide <- homicide %>% mutate(homicide, 
+                  femicide_class = case_when(
+                    between(femicide,0,0.318301025)  ~ 'Low',
+                    between(femicide,0.318301025,0.51811636) ~ 'Medium',
+                    between(femicide,0.51811636,2.291417952) ~ 'High' ))
+
+# Eliminate NAs in Response Variable
+homicide <- homicide %>% 
+  filter(femicide != is.na(homicide$femicide))
+
+# Additional Library
+library(MASS)
+library(GGally)
+library(class)
+library(boot)
+library(rpart)
+library(rpart.plot)
+library(leaps)
+```
+
+# Trees (Classification)
+```{r}
+# Create tree (The fitting uses K = 10 fold cross validation).
+trp_1 <- rpart(femicide_class ~ ., data = homicide_1)
+rpart.plot(trp_1) 
+rpart.plot(trp_1, extra = 3) # Misclassification Rate
+plotcp(trp_1) # Plot of Tree Error
+
+# Prune Tree
+trp_1$cptable # Find best value of Cp.
+min_cp_1 <-  trp_1$cptable[which.min(trp_1$cptable[,"xerror"]),"CP"]
+min_cp_1
+trpp_1 <- prune(trp_1, cp = min_cp)
+rpart.plot(trpp_1)
+nrow(homicide_1) 
+
+# Validation Set and Check Performance
+set.seed(123)
+Z <-  sample(nrow(homicide_1), nrow(homicide_1)/2)
+trpv_1 <- rpart(femicide_class ~ ., data = homicide_1, subset = Z)
+rpart.plot(trpv_1, faclen = 2, clip.facs = TRUE)
+Yhat = predict(trpv_1, newdata = homicide_1[-Z,], type = "class")
+summary(Yhat)
+table(Yhat, homicide_1$femicide_class[-Z])
+mean(Yhat != homicide_1$femicide_class[-Z]) 
+```
+
+# Stepwise Regression
+```{r}
+# Stepwise using Sequential Search
+reg_full <- lm(femicide ~ ., data = homicide_2)
+reg_null <- lm(femicide ~ 1, data = homicide_2)
+step_out <- step(reg_null, scope = list(lower = reg_null, upper = reg_full), method = "forward")
+summary(step_out)
+step_out <- step(reg_full, scope = list(lower = reg_null, upper = reg_full), method = "backwards")
+summary(step_out)
+
+# Adjusted R2
+which.max(sum_reg$adjr2)
+sum_reg$which[which.max(sum_reg$adjr2),]
+
+# BIC
+which.min(sum_reg$bic)
+sum_reg$which[which.min(sum_reg$bic),]
+
+# Cp
+which.min(abs(sum_reg$cp - 0:16))
+sum_reg$which[which.min(abs(sum_reg$cp - 0:16)),]
+
+# validation set
+set.seed(123)
+n <-  length(homicide_2$femicide)
+Z <-  sample(n, .5*n)
+reg <-  lm(femicide ~ subregion + year + rape + convicted, subset = Z , data = homicide_2)
+Yhat <-  predict(reg, homicide_2)
+mean((Yhat[-Z] - homicide_2$femicide[-Z])^2 )
+
+# K fold cross validation
+set.seed(123)
+reg_k10 <-  glm(femicide ~ subregion + year + rape + convicted, subset = Z , data = homicide_2)
+regCVk10 <- cv.glm(homicide_2, reg_k10, K = 10)
+regCVk10$delta[2]
+```
+
